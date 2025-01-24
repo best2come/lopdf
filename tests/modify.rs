@@ -15,8 +15,8 @@ fn test_get_object() {
         "stream".as_bytes().to_vec(),
     )));
 
-    println!("{:?}", id);
-    println!("{:?}", id2);
+    println!("{id:?}");
+    println!("{id2:?}");
 
     let obj1_exists = doc.get_object(id).is_ok();
     let obj2_exists = doc.get_object(id2).is_ok();
@@ -28,11 +28,14 @@ fn test_get_object() {
 #[cfg(feature = "nom_parser")]
 #[cfg(all(test, not(feature = "async")))]
 mod tests_with_parsing {
+    use std::sync::{atomic::AtomicBool, Arc};
+
     use super::*;
     use lopdf::Result;
 
     fn modify_text() -> Result<bool> {
-        let mut doc = Document::load("assets/example.pdf")?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut doc = Document::load("assets/example.pdf", stop)?;
         doc.version = "1.4".to_string();
         if let Some(Object::Stream(stream)) = doc.objects.get_mut(&(4, 0)) {
             let mut content = stream.decode_content().unwrap();
@@ -53,7 +56,8 @@ mod tests_with_parsing {
     }
 
     fn replace_text() -> Result<Document> {
-        let mut doc = Document::load("assets/example.pdf")?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut doc = Document::load("assets/example.pdf", stop.clone())?;
         doc.replace_text(1, "Hello World!", "Modified text!")?;
 
         // Create temporary folder to store file.
@@ -61,7 +65,7 @@ mod tests_with_parsing {
         let file_path = temp_dir.path().join("test_4_replace.pdf");
         doc.save(&file_path)?;
 
-        let doc = Document::load(file_path)?;
+        let doc = Document::load(file_path, stop)?;
         Ok(doc)
     }
 
@@ -71,7 +75,8 @@ mod tests_with_parsing {
     }
 
     fn get_mut() -> Result<bool> {
-        let mut doc = Document::load("assets/example.pdf")?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut doc = Document::load("assets/example.pdf", stop)?;
         let arr = doc
             .get_object_mut((5, 0))?
             .as_dict_mut()?

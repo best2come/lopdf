@@ -363,6 +363,8 @@ mod tests {
         // test load_from() and save_to()
         use std::fs::File;
         use std::io::Cursor;
+        use std::sync::atomic::AtomicBool;
+        use std::sync::Arc;
         // Create temporary folder to store file.
         let temp_dir = tempfile::tempdir().unwrap();
         let file_path = temp_dir.path().join("test_1_load_and_save.pdf");
@@ -371,8 +373,9 @@ mod tests {
 
         save_document(&file_path, &mut doc);
 
+        let stop = Arc::new(AtomicBool::new(false));
         let in_file = File::open(file_path).unwrap();
-        let mut in_doc = Document::load_from(in_file).unwrap();
+        let mut in_doc = Document::load_from(in_file, stop).unwrap();
 
         let out_buf = Vec::new();
         let mut memory_cursor = Cursor::new(out_buf);

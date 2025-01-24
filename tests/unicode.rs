@@ -131,7 +131,10 @@ fn get_text_from_first_page(doc: &Document) -> String {
 #[cfg(not(feature = "async"))]
 #[test]
 fn unicode_can_be_extracted_from_loaded_pdf() -> lopdf::Result<()> {
-    let doc = Document::load("assets/unicode.pdf")?;
+    use std::sync::{atomic::AtomicBool, Arc};
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let doc = Document::load("assets/unicode.pdf", stop)?;
     let extracted_text = get_text_from_first_page(&doc);
     // extract text can currently map a consecutive fragment of text
     // to one divided into multiple lines, therefore we have to remove the

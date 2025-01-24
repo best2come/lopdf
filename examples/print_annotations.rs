@@ -72,11 +72,14 @@ fn handle_pdf_page(doc: Document) -> u32 {
 
 #[cfg(not(feature = "async"))]
 fn main() {
+    use std::sync::{atomic::AtomicBool, Arc};
+
     logging();
 
     let args: Vec<String> = args();
+    let stop = Arc::new(AtomicBool::new(false));
 
-    match Document::load(&args[1]) {
+    match Document::load(&args[1], stop) {
         Ok(doc) => _ = handle_pdf_page(doc),
         Err(e) => eprintln!("Error opening {:?}: {:?}", &args[1], e),
     }

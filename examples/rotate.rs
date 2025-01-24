@@ -4,13 +4,16 @@ use std::str::FromStr;
 #[cfg(not(feature = "async"))]
 fn main() {
     // Collect command line arguments: input_file angle output_file
+
+    use std::sync::{atomic::AtomicBool, Arc};
     let args: Vec<String> = std::env::args().collect();
     assert!(args.len() == 4, "Not enough arguments: input_file angle output_file");
     let input_file = &args[1];
     let angle = i64::from_str(&args[2]).expect("error in parsing angle argument");
     assert!(angle % 90 == 0, "angle must be a multiple of 90");
     let output_file = &args[3];
-    let mut doc = Document::load(input_file).unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let mut doc = Document::load(input_file, stop).unwrap();
 
     // Note: this example sets Rotate on each page individually for flexibility,
     //  but you can also set it on any node in the page tree and child pages will

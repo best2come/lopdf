@@ -4,6 +4,7 @@ use std::fmt::Write;
 use std::io::{Error, ErrorKind};
 use std::path::Path;
 use std::str::FromStr;
+use std::sync::{atomic::AtomicBool, Arc};
 
 #[cfg(feature = "async")]
 use tokio::runtime::Builder;
@@ -69,8 +70,8 @@ fn generate_operations(rects: Vec<(f64, f64, f64, f64, u8)>) -> String {
 }
 
 #[cfg(not(feature = "async"))]
-fn load_pdf<P: AsRef<Path>>(path: P) -> Result<Document, Error> {
-    Document::load(path).map_err(|e| Error::new(ErrorKind::Other, e.to_string()))
+fn load_pdf<P: AsRef<Path>>(path: P, stop: Arc<AtomicBool>) -> Result<Document, Error> {
+    Document::load(path, stop).map_err(|e| Error::new(ErrorKind::Other, e.to_string()))
 }
 
 #[cfg(feature = "async")]
@@ -91,7 +92,8 @@ fn main() {
     let pdf_file = &args[1];
     let code = u16::from_str(&args[2]).expect("error in parsing code argument");
     let output_file = &args[3];
-    let mut doc = load_pdf(pdf_file).unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let mut doc = load_pdf(pdf_file, stop).unwrap();
     for (page_number, page_id) in doc.get_pages() {
         let operations = generate_operations(generate_barcode(page_number, code));
         let barcode = xobject::form(

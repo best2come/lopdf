@@ -1,6 +1,8 @@
 #![feature(test)]
 use std::fs::File;
 use std::io::{Cursor, Read};
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 extern crate test;
 use lopdf::Document;
@@ -14,7 +16,8 @@ fn bench_load(b: &mut test::test::Bencher) {
         .unwrap();
 
     b.iter(|| {
-        Document::load_from(Cursor::new(&buffer)).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        Document::load_from(Cursor::new(&buffer), stop).unwrap();
     })
 }
 
@@ -27,6 +30,7 @@ fn bench_load_incremental_pdf(b: &mut test::test::Bencher) {
         .unwrap();
 
     b.iter(|| {
-        Document::load_from(Cursor::new(&buffer)).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        Document::load_from(Cursor::new(&buffer), stop).unwrap();
     })
 }

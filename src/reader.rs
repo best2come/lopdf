@@ -8,7 +8,8 @@ use std::fs::File;
 #[cfg(not(feature = "async"))]
 use std::io::Read;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 #[cfg(feature = "rayon")]
 use rayon::prelude::*;
@@ -31,34 +32,39 @@ type FilterFunc = fn((u32, u16), &mut Object) -> Option<((u32, u16), Object)>;
 impl Document {
     /// Load a PDF document from a specified file path.
     #[inline]
-    pub fn load<P: AsRef<Path>>(path: P) -> Result<Document> {
+    pub fn load<P: AsRef<Path>>(path: P, stop: Arc<AtomicBool>) -> Result<Document> {
         let file = File::open(path)?;
         let capacity = Some(file.metadata()?.len() as usize);
-        Self::load_internal(file, capacity, None)
+        Self::load_internal(file, capacity, None, stop)
     }
 
     #[inline]
-    pub fn load_filtered<P: AsRef<Path>>(path: P, filter_func: FilterFunc) -> Result<Document> {
+    pub fn load_filtered<P: AsRef<Path>>(path: P, filter_func: FilterFunc, stop: Arc<AtomicBool>) -> Result<Document> {
         let file = File::open(path)?;
         let capacity = Some(file.metadata()?.len() as usize);
-        Self::load_internal(file, capacity, Some(filter_func))
+        Self::load_internal(file, capacity, Some(filter_func), stop)
     }
 
     /// Load a PDF document from an arbitrary source.
     #[inline]
-    pub fn load_from<R: Read>(source: R) -> Result<Document> {
-        Self::load_internal(source, None, None)
+    pub fn load_from<R: Read>(source: R, stop: Arc<AtomicBool>) -> Result<Document> {
+        Self::load_internal(source, None, None, stop)
     }
 
     fn load_internal<R: Read>(
-        mut source: R, capacity: Option<usize>, filter_func: Option<FilterFunc>,
+        mut source: R, capacity: Option<usize>, filter_func: Option<FilterFunc>, stop: Arc<AtomicBool>,
     ) -> Result<Document> {
         let mut buffer = capacity.map(Vec::with_capacity).unwrap_or_default();
         source.read_to_end(&mut buffer)?;
 
+        if stop.load(Ordering::SeqCst) {
+            return Err(Error::Parse(ParseError::EndOfInput));
+        }
+
         Reader {
             buffer: &buffer,
             document: Document::new(),
+            stop,
         }
         .read(filter_func)
     }
@@ -113,6 +119,7 @@ impl TryInto<Document> for &[u8] {
         Reader {
             buffer: self,
             document: Document::new(),
+            stop: Arc::new(AtomicBool::new(false)),
         }
         .read(None)
     }
@@ -122,25 +129,26 @@ impl TryInto<Document> for &[u8] {
 impl IncrementalDocument {
     /// Load a PDF document from a specified file path.
     #[inline]
-    pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
+    pub fn load<P: AsRef<Path>>(path: P, stop: Arc<AtomicBool>) -> Result<Self> {
         let file = File::open(path)?;
         let capacity = Some(file.metadata()?.len() as usize);
-        Self::load_internal(file, capacity)
+        Self::load_internal(file, capacity, stop)
     }
 
     /// Load a PDF document from an arbitrary source.
     #[inline]
-    pub fn load_from<R: Read>(source: R) -> Result<Self> {
-        Self::load_internal(source, None)
+    pub fn load_from<R: Read>(source: R, stop: Arc<AtomicBool>) -> Result<Self> {
+        Self::load_internal(source, None, stop)
     }
 
-    fn load_internal<R: Read>(mut source: R, capacity: Option<usize>) -> Result<Self> {
+    fn load_internal<R: Read>(mut source: R, capacity: Option<usize>, stop: Arc<AtomicBool>) -> Result<Self> {
         let mut buffer = capacity.map(Vec::with_capacity).unwrap_or_default();
         source.read_to_end(&mut buffer)?;
 
         let document = Reader {
             buffer: &buffer,
             document: Document::new(),
+            stop,
         }
         .read(None)?;
 
@@ -198,6 +206,7 @@ impl TryInto<IncrementalDocument> for &[u8] {
         let document = Reader {
             buffer: self,
             document: Document::new(),
+            stop: Arc::new(AtomicBool::new(false)),
         }
         .read(None)?;
 
@@ -208,6 +217,7 @@ impl TryInto<IncrementalDocument> for &[u8] {
 pub struct Reader<'a> {
     pub buffer: &'a [u8],
     pub document: Document,
+    pub stop: Arc<AtomicBool>,
 }
 
 /// Maximum allowed embedding of literal strings.
@@ -224,7 +234,8 @@ impl Reader<'_> {
         let version =
             parser::header(ParserInput::new_extra(self.buffer, "header")).ok_or(ParseError::InvalidFileHeader)?;
 
-        //The binary_mark is in line 2 after the pdf version. If at other line number, then will be declared as invalid pdf.
+        //The binary_mark is in line 2 after the pdf version. If at other line number, then will be declared as invalid
+        // pdf.
         if let Some(pos) = self.buffer.iter().position(|&byte| byte == b'\n') {
             self.document.binary_mark =
                 parser::binary_mark(ParserInput::new_extra(&self.buffer[pos + 1..], "binary_mark"))
@@ -288,6 +299,9 @@ impl Reader<'_> {
         let object_streams = Mutex::new(vec![]);
 
         let entries_filter_map = |(_, entry): (&_, &_)| {
+            if self.stop.load(Ordering::SeqCst) {
+                return None;
+            }
             if let XrefEntry::Normal { offset, .. } = *entry {
                 let (object_id, mut object) = self
                     .read_object(offset as usize, None, &mut HashSet::new())
@@ -477,7 +491,8 @@ impl Reader<'_> {
 #[cfg(all(test, not(feature = "async")))]
 #[test]
 fn load_document() {
-    let mut doc = Document::load("assets/example.pdf").unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let mut doc = Document::load("assets/example.pdf", stop).unwrap();
     assert_eq!(doc.version, "1.5");
 
     // Create temporary folder to store file.

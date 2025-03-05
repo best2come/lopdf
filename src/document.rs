@@ -1,14 +1,16 @@
 use super::encodings::Encoding;
 use super::{Bookmark, Dictionary, Object, ObjectId};
-use crate::encryption;
+use crate::encryption::crypt_filters::*;
+use crate::encryption::{self, EncryptionState, PasswordAlgorithm};
 use crate::xobject::PdfImage;
 use crate::xref::{Xref, XrefType};
-use crate::{Error, Result, Stream};
+use crate::{Error, ObjectStream, Result, Stream};
 use log::debug;
 use std::cmp::max;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 use std::str;
+use std::sync::Arc;
 
 /// A PDF document.
 ///
@@ -50,6 +52,10 @@ pub struct Document {
     /// It is used to support incremental updates in PDFs.
     /// Default value is `0`.
     pub xref_start: usize,
+
+    /// The encryption state stores the parameters that were used to decrypt this document if the
+    /// document has been decrypted.
+    pub encryption_state: Option<EncryptionState>,
 }
 
 impl Document {
@@ -66,6 +72,7 @@ impl Document {
             bookmarks: Vec::new(),
             bookmark_table: HashMap::new(),
             xref_start: 0,
+            encryption_state: None,
         }
     }
 
@@ -84,6 +91,7 @@ impl Document {
             bookmarks: Vec::new(),
             bookmark_table: HashMap::new(),
             xref_start: 0,
+            encryption_state: None,
         }
     }
 
@@ -260,71 +268,259 @@ impl Document {
         self.get_encrypted().is_ok()
     }
 
+    /// Authenticate the provided owner password directly as bytes without sanitization
+    pub fn authenticate_raw_owner_password<P>(
+        &self,
+        password: P,
+    ) -> Result<()>
+    where
+        P: AsRef<[u8]>
+    {
+        if !self.is_encrypted() {
+            return Err(Error::NotEncrypted);
+        }
+
+        let password = password.as_ref();
+        let algorithm = PasswordAlgorithm::try_from(self)?;
+        algorithm.authenticate_owner_password(self, password)?;
+
+        Ok(())
+    }
+
+    /// Authenticate the provided user password directly as bytes without sanitization
+    pub fn authenticate_raw_user_password<P>(
+        &self,
+        password: P,
+    ) -> Result<()>
+    where
+        P: AsRef<[u8]>,
+    {
+        if !self.is_encrypted() {
+            return Err(Error::NotEncrypted);
+        }
+
+        let password = password.as_ref();
+        let algorithm = PasswordAlgorithm::try_from(self)?;
+        algorithm.authenticate_user_password(self, password)?;
+
+        Ok(())
+    }
+
+    /// Authenticate the provided owner/user password as bytes without sanitization
+    pub fn authenticate_raw_password<P>(
+        &self,
+        password: P,
+    ) -> Result<()>
+    where
+        P: AsRef<[u8]>
+    {
+        if !self.is_encrypted() {
+            return Err(Error::NotEncrypted);
+        }
+
+        let password = password.as_ref();
+        let algorithm = PasswordAlgorithm::try_from(self)?;
+        algorithm.authenticate_owner_password(self, password)
+            .or(algorithm.authenticate_user_password(self, password))?;
+
+        Ok(())
+    }
+
+    /// Authenticate the provided owner password
+    pub fn authenticate_owner_password(
+        &self,
+        password: &str,
+    ) -> Result<()> {
+        if !self.is_encrypted() {
+            return Err(Error::NotEncrypted);
+        }
+
+        let algorithm = PasswordAlgorithm::try_from(self)?;
+        let password = algorithm.sanitize_password(password)?;
+        algorithm.authenticate_owner_password(self, &password)?;
+
+        Ok(())
+    }
+
+    /// Authenticate the provided user password
+    pub fn authenticate_user_password(
+        &self,
+        password: &str,
+    ) -> Result<()> {
+        if !self.is_encrypted() {
+            return Err(Error::NotEncrypted);
+        }
+
+        let algorithm = PasswordAlgorithm::try_from(self)?;
+        let password = algorithm.sanitize_password(password)?;
+        algorithm.authenticate_user_password(self, &password)?;
+
+        Ok(())
+    }
+
+    /// Authenticate the provided owner/user password
+    pub fn authenticate_password(
+        &self,
+        password: &str,
+    ) -> Result<()> {
+        if !self.is_encrypted() {
+            return Err(Error::NotEncrypted);
+        }
+
+        let algorithm = PasswordAlgorithm::try_from(self)?;
+        let password = algorithm.sanitize_password(password)?;
+        algorithm.authenticate_owner_password(self, &password)
+            .or(algorithm.authenticate_user_password(self, &password))?;
+
+        Ok(())
+    }
+
+    /// Returns a `BTreeMap` of the crypt filters available in the PDF document if any.
+    pub fn get_crypt_filters(&self) -> BTreeMap<Vec<u8>, Arc<dyn CryptFilter>> {
+        let mut crypt_filters = BTreeMap::new();
+
+        if let Ok(filters) = self
+            .get_encrypted()
+            .and_then(|dict| dict.get(b"CF"))
+            .and_then(|object| object.as_dict()) {
+            for (name, filter) in filters {
+                let Ok(filter) = filter.as_dict() else {
+                    continue;
+                };
+
+                if filter.get(b"Type").is_ok() && !filter.has_type(b"CryptFilter") {
+                    continue;
+                }
+
+                // Get the Crypt Filter Method (CFM) used, if any, by the PDF reader to decrypt data.
+                let cfm = filter.get(b"CFM")
+                    .and_then(|object| object.as_name())
+                    .ok();
+
+                let crypt_filter: Arc<dyn CryptFilter> = match cfm {
+                    // The application shall ask the security handler for the file encryption key
+                    // and shall implicitly decrypt data using the RC4 algorithm.
+                    Some(b"V2") => Arc::new(Rc4CryptFilter),
+                    // The application shall ask the security handler for the file encryption key
+                    // and shall implicitly decrypt data using the AES-128 algorithm in Cipher
+                    // Block Chaining (CBC) mode with a 16-byte block size and an initialization
+                    // vector that shall be randomly generated and placed as the first 16 bytes in
+                    // the stream or string. The key size (Length) shall be 128 bits.
+                    Some(b"AESV2") => Arc::new(Aes128CryptFilter),
+                    // The application shall ask the security handler for the file encryption key
+                    // and shall implicitly decrypt data using the AES-256 algorithm in Cipher
+                    // Block Chaining (CBC) with padding mode with a 16-byte block size and an
+                    // initialization vector that is randomly generated and placed as the first 16
+                    // bytes in the stream or string. The key size (Length) shall be 256 bits.
+                    Some(b"AESV3") => Arc::new(Aes256CryptFilter),
+                    // The application shall not decrypt data but shall direct the input stream to
+                    // the security handler for decryption.
+                    Some(b"Identity") | None => Arc::new(IdentityCryptFilter),
+                    // Unknown crypt filter method.
+                    _ => continue,
+                };
+
+                crypt_filters.insert(name.to_vec(), crypt_filter);
+            }
+        }
+
+        crypt_filters
+    }
+
+    /// Replaces all encrypted Strings and Streams with their encrypted contents
+    pub fn encrypt(
+        &mut self,
+        state: &EncryptionState,
+    ) -> Result<()> {
+        if self.is_encrypted() {
+            return Err(Error::AlreadyEncrypted);
+        }
+
+        let encrypted = state.encode()?;
+
+        for (&id, obj) in self.objects.iter_mut() {
+            encryption::encrypt_object(state, id, obj)?;
+        }
+
+        let object_id = self.add_object(encrypted);
+        self.trailer.set(b"Encrypt", Object::Reference(object_id));
+        self.encryption_state = None;
+
+        Ok(())
+    }
+
     /// Replaces all encrypted Strings and Streams with their decrypted contents
-    pub fn decrypt<P: AsRef<[u8]>>(&mut self, password: P) -> Result<()> {
+    pub fn decrypt(
+        &mut self,
+        password: &str,
+    ) -> Result<()> {
+        if !self.is_encrypted() {
+            return Err(Error::NotEncrypted);
+        }
+
+        let algorithm = PasswordAlgorithm::try_from(&*self)?;
+        let password = algorithm.sanitize_password(password)?;
+        self.decrypt_raw(&password)
+    }
+
+    /// Replaces all encrypted Strings and Streams with their decrypted contents with the password
+    /// provided directly as bytes without sanitization
+    pub fn decrypt_raw<P>(
+        &mut self,
+        password: P,
+    ) -> Result<()>
+    where
+        P: AsRef<[u8]>,
+    {
+        if !self.is_encrypted() {
+            return Err(Error::NotEncrypted);
+        }
+
+        self.authenticate_raw_password(&password)?;
+
         // Find the ID of the encryption dict; we'll want to skip it when decrypting
         let encryption_obj_id = self.trailer.get(b"Encrypt").and_then(Object::as_reference)?;
 
-        // Since PDF 1.5, metadata may or may not be encrypted; defaults to true
-        let metadata_is_encrypted = self
-            .get_object(encryption_obj_id)?
-            .as_dict()?
-            .get(b"EncryptMetadata")
-            .and_then(|o| o.as_bool())
-            .unwrap_or(true);
+        let state = EncryptionState::decode(&*self, password)?;
 
-        let key = encryption::get_encryption_key(self, &password, true)?;
-        let cfm = self
-            .get_encrypted()?
-            .get(b"CF")?
-            .as_dict()?
-            .get(b"StdCF")?
-            .as_dict()?
-            .get(b"CFM")?
-            .as_name()
-            .unwrap_or_default();
-        let is_aes = cfm == b"AESV2";
         for (&id, obj) in self.objects.iter_mut() {
             // The encryption dictionary is not encrypted, leave it alone
             if id == encryption_obj_id {
                 continue;
             }
 
-            // If a Metadata stream but metadata isn't encrypted, leave it alone
-            if obj.type_name().ok() == Some(b"Metadata") && !metadata_is_encrypted {
+            encryption::decrypt_object(&state, id, obj)?;
+        }
+
+        // Add the objects from the object streams now that they have been decrypted.
+        let mut object_streams = vec![];
+
+        for (_, object) in self.objects.iter_mut() {
+            let Ok(ref mut stream) = object.as_stream_mut() else {
+                continue;
+            };
+
+            if !stream.dict.has_type(b"ObjStm") {
                 continue;
             }
 
-            let decrypted = match encryption::decrypt_object(&key, id, &*obj, is_aes) {
-                Ok(content) => content,
-                Err(encryption::DecryptionError::NotDecryptable) => {
-                    continue;
-                }
-                Err(_err) => {
-                    return Err(_err.into());
-                }
-            };
+            let obj_stream = ObjectStream::new(stream).ok().unwrap();
 
-            // Only strings and streams are encrypted
-            match obj {
-                Object::Stream(stream) => stream.set_content(decrypted),
-                Object::String(content, _) => *content = decrypted,
-                _ => {}
-            }
+            // TODO: Is insert and replace intended behavior?
+            // See https://github.com/J-F-Liu/lopdf/issues/160 for more info
+            object_streams.extend(obj_stream.objects);
         }
 
-        if let Ok(info_obj_id) = self.trailer.get(b"Info").and_then(Object::as_reference) {
-            if let Ok(info_dict) = self.get_object_mut(info_obj_id).and_then(Object::as_dict_mut) {
-                for (_, info_obj) in info_dict.iter_mut() {
-                    if let Ok(content) = encryption::decrypt_object(&key, info_obj_id, &*info_obj, is_aes) {
-                        info_obj.as_str_mut()?.clear();
-                        info_obj.as_str_mut()?.extend(content);
-                    };
-                }
-            }
+        // Only add entries, but never replace entries
+        for (id, entry) in object_streams {
+            self.objects.entry(id).or_insert(entry);
         }
 
-        self.trailer.remove(b"Encrypt");
+        let object_id = self.trailer.remove(b"Encrypt").unwrap().as_reference()?;
+        self.objects.remove(&object_id);
+
+        self.encryption_state = Some(state);
+
         Ok(())
     }
 
@@ -626,7 +822,7 @@ impl<'a> PageTreeIter<'a> {
 
     fn kids(doc: &Document, page_tree_id: ObjectId) -> Option<&[Object]> {
         doc.get_dictionary(page_tree_id)
-            .and_then(|page_tree| page_tree.get(b"Kids"))
+            .and_then(|page_tree| page_tree.get_deref(b"Kids", doc))
             .and_then(Object::as_array)
             .map(|k| k.as_slice())
             .ok()

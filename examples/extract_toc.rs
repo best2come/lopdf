@@ -89,7 +89,10 @@ fn filter_func(object_id: (u32, u16), object: &mut Object) -> Option<((u32, u16)
 
 #[cfg(not(feature = "async"))]
 fn load_pdf<P: AsRef<Path>>(path: P) -> Result<Document, Error> {
-    Document::load_filtered(path, filter_func).map_err(|e| Error::new(ErrorKind::Other, e.to_string()))
+    use std::sync::{atomic::AtomicBool, Arc};
+
+    let stop = Arc::new(AtomicBool::new(false));
+    Document::load_filtered(path, filter_func, stop).map_err(|e| Error::new(ErrorKind::Other, e.to_string()))
 }
 
 #[cfg(feature = "async")]

@@ -1,4 +1,3 @@
-#[cfg(feature = "nom_parser")]
 use log::{error, warn};
 use std::cmp;
 use std::collections::{BTreeMap, HashSet};
@@ -234,12 +233,15 @@ impl Reader<'_> {
         let version =
             parser::header(ParserInput::new_extra(self.buffer, "header")).ok_or(ParseError::InvalidFileHeader)?;
 
-        //The binary_mark is in line 2 after the pdf version. If at other line number, then will be declared as invalid
-        // pdf.
+        //The binary_mark is in line 2 after the pdf version. If at other line number, then will be declared as invalid pdf.
         if let Some(pos) = self.buffer.iter().position(|&byte| byte == b'\n') {
-            self.document.binary_mark =
+            if let Some(binary_mark) =
                 parser::binary_mark(ParserInput::new_extra(&self.buffer[pos + 1..], "binary_mark"))
-                    .unwrap_or(self.document.binary_mark);
+            {
+                if binary_mark.iter().all(|&byte| byte >= 128) {
+                    self.document.binary_mark = binary_mark;
+                }
+            }
         }
 
         let xref_start = Self::get_xref_start(self.buffer)?;
@@ -295,6 +297,8 @@ impl Reader<'_> {
         self.document.trailer = trailer;
         self.document.reference_table = xref;
 
+        let is_encrypted = self.document.trailer.get(b"Encrypt").is_ok();
+
         let zero_length_streams = Mutex::new(vec![]);
         let object_streams = Mutex::new(vec![]);
 
@@ -310,8 +314,9 @@ impl Reader<'_> {
                 if let Some(filter_func) = filter_func {
                     filter_func(object_id, &mut object)?;
                 }
+
                 if let Ok(ref mut stream) = object.as_stream_mut() {
-                    if stream.dict.has_type(b"ObjStm") {
+                    if stream.dict.has_type(b"ObjStm") && !is_encrypted {
                         let obj_stream = ObjectStream::new(stream).ok()?;
                         let mut object_streams = object_streams.lock().unwrap();
                         // TODO: Is insert and replace intended behavior?
@@ -331,6 +336,7 @@ impl Reader<'_> {
                         zero_length_streams.push(object_id);
                     }
                 }
+
                 Some((object_id, object))
             } else {
                 None
@@ -365,7 +371,13 @@ impl Reader<'_> {
             let _ = self.read_stream_content(object_id);
         }
 
-        Ok(self.document)
+        let mut document = self.document;
+
+        if document.authenticate_password("").is_ok() {
+            document.decrypt("")?;
+        }
+
+        Ok(document)
     }
 
     fn read_stream_content(&mut self, object_id: ObjectId) -> Result<()> {

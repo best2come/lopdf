@@ -19,6 +19,9 @@ pub enum Error {
     },
     #[error("dictionary has wrong type: ")]
     DictType { expected: &'static str, found: String },
+    /// PDF document is already encrypted.
+    #[error("PDF document is already encrypted")]
+    AlreadyEncrypted,
     /// The encountered character encoding is invalid.
     #[error("invalid character encoding")]
     CharacterEncoding,
@@ -56,6 +59,9 @@ pub enum Error {
     /// PDF document has no outline.
     #[error("PDF document does not have an outline")]
     NoOutline,
+    /// PDF document is not encrypted.
+    #[error("PDF document is not encrypted")]
+    NotEncrypted,
     /// Missing xref entry.
     #[error("missing xref entry")]
     MissingXrefEntry,
@@ -97,6 +103,11 @@ pub enum Error {
     /// Could not parse ToUnicodeCMap.
     #[error("failed parsing ToUnicode CMap: {0}")]
     ToUnicodeCMap(#[from] UnicodeCMapError),
+    #[error("converting integer: {0}")]
+    TryFromInt(#[from] std::num::TryFromIntError),
+    /// Encountered an unsupported security handler.
+    #[error("unsupported security handler")]
+    UnsupportedSecurityHandler(Vec<u8>),
 }
 
 #[derive(Error, Debug)]

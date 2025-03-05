@@ -65,6 +65,7 @@ embed_image = ["image"]
 jiff = ["dep:jiff"]
 serde = ["dep:serde"]
 time = ["dep:time"]
+mimalloc = ["dep:mimalloc"]
 
 [[example]]
 name = "extract_toc"

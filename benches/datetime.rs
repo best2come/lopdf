@@ -12,7 +12,10 @@ fn create_and_parse_datetime(b: &mut Bencher) {
         let time = Local::now().with_nanosecond(0).unwrap();
         let text: Object = time.into();
         let time2 = text.as_datetime();
-        assert_eq!(time2, Some(time));
+        assert_eq!(
+            time2.map(|v| v.0),
+            Some(time.to_string().replace(" ", "").replace("-", "").replace(":", ""))
+        );
     });
 }
 

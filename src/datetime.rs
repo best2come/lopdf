@@ -152,7 +152,7 @@ fn convert_utc_offset(bytes: &mut [u8]) {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct DateTime(String);
+pub struct DateTime(pub String);
 
 impl Object {
     // Parses the `D`, `:` and `\` out of a `Object::String` to parse the date time

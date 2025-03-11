@@ -79,7 +79,6 @@ fn main() {
                 string_filter: b"StdCF".to_vec(),
                 owner_password,
                 user_password,
-                key_length: 128,
                 permissions,
             }
         }
@@ -200,7 +199,6 @@ async fn main() {
                 string_filter: b"StdCF".to_vec(),
                 owner_password,
                 user_password,
-                key_length: 128,
                 permissions,
             }
         }

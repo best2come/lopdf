@@ -316,23 +316,23 @@ impl fmt::Debug for Object {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Object::Null => write!(f, "Null"),
-            Object::Boolean(value) => write!(f, "{}", value),
-            Object::Integer(value) => write!(f, "{}", value),
-            Object::Real(value) => write!(f, "{}", value),
+            Object::Boolean(value) => write!(f, "{value}"),
+            Object::Integer(value) => write!(f, "{value}"),
+            Object::Real(value) => write!(f, "{value}"),
             Object::Name(name) => write!(f, "/{}", String::from_utf8_lossy(name)),
             Object::String(text, StringFormat::Literal) => write!(f, "({})", String::from_utf8_lossy(text)),
             Object::String(text, StringFormat::Hexadecimal) => {
                 write!(f, "<")?;
                 for b in text {
-                    write!(f, "{:02x}", b)?;
+                    write!(f, "{b:02x}")?;
                 }
                 write!(f, ">")
             }
             Object::Array(array) => {
-                let items = array.iter().map(|item| format!("{:?}", item)).collect::<Vec<String>>();
+                let items = array.iter().map(|item| format!("{item:?}")).collect::<Vec<String>>();
                 write!(f, "[{}]", items.join(" "))
             }
-            Object::Dictionary(dict) => write!(f, "{:?}", dict),
+            Object::Dictionary(dict) => write!(f, "{dict:?}"),
             Object::Stream(stream) => write!(f, "{:?}stream...endstream", stream.dict),
             Object::Reference(id) => write!(f, "{} {} R", id.0, id.1),
         }

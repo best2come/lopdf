@@ -13,7 +13,7 @@ license = "MIT"
 name = "lopdf"
 readme = "README.md"
 repository = "https://github.com/J-F-Liu/lopdf.git"
-version = "0.36.0"
+version = "0.36.1"
 rust-version = "1.85"
 
 [dependencies]
@@ -26,19 +26,20 @@ chrono = { version = "0.4", optional = true, default-features = false, features 
     "clock",
 ] }
 ecb = "0.1.2"
-encoding_rs = "0.8.32"
+encoding_rs = "0.8.35"
 flate2 = "1.1"
 image = { version = "0.25", optional = true }
 indexmap = "2.8"
 itoa = "1.0"
 jiff = { version = "0.2", optional = true }
+getrandom = "0.3"
 log = "0.4"
 md-5 = "0.10"
 nom = "8.0"
 nom_locate = "5.0"
 rand = { version = "0.9" }
 rangemap = "1.5"
-rayon = { version = "1.6", optional = true }
+rayon = { version = "1.10", optional = true }
 serde = { version = "1.0", features = ["derive"], optional = true }
 sha2 = "0.10.8"
 stringprep = "0.1.5"
@@ -54,8 +55,9 @@ weezl = "0.1"
 clap = { version = "4.5", features = ["derive"] }
 env_logger = "0.11"
 serde_json = "1.0"
-shellexpand = "3.0"
+shellexpand = "3.1"
 tempfile = "3.18"
+wasm-bindgen-test = "0.2"
 
 [features]
 async = ["tokio/rt-multi-thread", "tokio/macros"]
@@ -63,6 +65,7 @@ chrono = ["dep:chrono"]
 default = ["chrono", "jiff", "rayon", "time"]
 embed_image = ["image"]
 jiff = ["dep:jiff"]
+wasm_js = ["getrandom/wasm_js"]
 serde = ["dep:serde"]
 time = ["dep:time"]
 mimalloc = ["dep:mimalloc"]

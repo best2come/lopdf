@@ -101,15 +101,31 @@ impl TryFrom<&Document> for PasswordAlgorithm {
 
         // The length of the file encryption key shall only be present if V is 2 or 3 (but
         // documents with higher values for V seem to have this field).
-        if length.is_some() && version < 2 {
-            return Err(DecryptionError::InvalidKeyLength)?;
-        }
-
-        // The length of the file encryption key shall be a multiple of 8, in the range 40 to and
-        // including 128.
         if let Some(length) = length {
-            if length % 8 != 0 || !(40..=128).contains(&length) {
-                return Err(DecryptionError::InvalidKeyLength)?;
+            match version {
+                // The length of the file encryption key shall be a multiple of 8 in the range 40
+                // to and including 128.
+                2..=3 => {
+                    if length % 8 != 0 || !(40..=128).contains(&length) {
+                        return Err(DecryptionError::InvalidKeyLength)?;
+                    }
+                },
+                // The Length field should not be present if V is 4. However, if it is present it
+                // must be 128.
+                4 => {
+                    if length != 128 {
+                        return Err(DecryptionError::InvalidKeyLength)?;
+                    }
+                }
+                // The Length field should not be present if V is 5. However, if it is present it
+                // must be 256.
+                5 => {
+                    if length != 256 {
+                        return Err(DecryptionError::InvalidKeyLength)?;
+                    }
+                }
+                // The Length field may not be present otherwise.
+                _ => return Err(DecryptionError::InvalidKeyLength)?,
             }
         }
 
@@ -132,8 +148,8 @@ impl TryFrom<&Document> for PasswordAlgorithm {
             return Err(DecryptionError::InvalidHashLength)?;
         }
 
-        // The owner value is 48 bytes long if the value of R is 6.
-        if revision == 6 && owner_value.len() != 48 {
+        // The owner value is 48 bytes long if the value of R is 5 or greater.
+        if revision >= 5 && owner_value.len() != 48 {
             return Err(DecryptionError::InvalidHashLength)?;
         }
 
@@ -143,8 +159,9 @@ impl TryFrom<&Document> for PasswordAlgorithm {
             .ok()
             .unwrap_or_default();
 
-        // The owner encrypted blob is required if R is 6 and the blob shall be 32 bytes long.
-        if revision == 6 && owner_encrypted.len() != 32 {
+        // The owner encrypted blob is required if R is 5 or greater and the blob shall be 32 bytes
+        // long.
+        if revision >= 5 && owner_encrypted.len() != 32 {
             return Err(DecryptionError::InvalidCipherTextLength)?;
         }
 
@@ -160,8 +177,8 @@ impl TryFrom<&Document> for PasswordAlgorithm {
             return Err(DecryptionError::InvalidHashLength)?;
         }
 
-        // The user value is 48 bytes long if the value of R is 6.
-        if revision == 6 && user_value.len() != 48 {
+        // The user value is 48 bytes long if the value of R is 5 or greater.
+        if revision >= 5 && user_value.len() != 48 {
             return Err(DecryptionError::InvalidHashLength)?;
         }
 
@@ -171,8 +188,9 @@ impl TryFrom<&Document> for PasswordAlgorithm {
             .ok()
             .unwrap_or_default();
 
-        // The user encrypted blob is required if R is 6 and the blob shall be 32 bytes long.
-        if revision == 6 && user_encrypted.len() != 32 {
+        // The user encrypted blob is required if R is 5 or greater and the blob shall be 32 bytes
+        // long.
+        if revision >= 5 && user_encrypted.len() != 32 {
             return Err(DecryptionError::InvalidCipherTextLength)?;
         }
 
@@ -183,7 +201,7 @@ impl TryFrom<&Document> for PasswordAlgorithm {
             .map_err(|_| DecryptionError::InvalidType)?
             as u64;
 
-        let permissions = Permissions::from_bits_truncate(permission_value);
+        let permissions = Permissions::from_bits_retain(permission_value);
 
         let permission_encrypted = encrypted.get(b"Perms")
             .and_then(Object::as_str)
@@ -191,8 +209,9 @@ impl TryFrom<&Document> for PasswordAlgorithm {
             .ok()
             .unwrap_or_default();
 
-        // The permission encrypted blob is required if R is 6 and the blob shall be 16 bytes long.
-        if revision == 6 && permission_encrypted.len() != 16 {
+        // The permission encrypted blob is required if R is 65 or greater and the blob shall be
+        // 16 bytes long.
+        if revision >= 5 && permission_encrypted.len() != 16 {
             return Err(DecryptionError::InvalidCipherTextLength)?;
         }
 
@@ -273,7 +292,7 @@ impl PasswordAlgorithm {
         //
         // We don't actually care about the permissions, but we need the correct value to derive the
         // correct key.
-        hasher.update((self.permissions.p_value() as u32).to_le_bytes());
+        hasher.update((self.permissions.bits() as u32).to_le_bytes());
 
         // Pass the first element of the file's file identifier array (the value of the ID entry in the
         // document's trailer dictionary to the MD5 hash function.
@@ -1011,7 +1030,7 @@ impl PasswordAlgorithm {
         let mut bytes = [0u8; 16];
 
         // Record the 8 bytes of permission in the bytes 0-7 of the block, low order byte first.
-        bytes[..8].copy_from_slice(&u64::to_le_bytes(self.permissions.p_value()));
+        bytes[..8].copy_from_slice(&u64::to_le_bytes(self.permissions.bits()));
 
         // Set byte 8 to ASCII character "T" or "F" according to the EncryptMetadata boolean.
         bytes[8] = if self.encrypt_metadata { b'T' } else { b'F' };
@@ -1028,8 +1047,11 @@ impl PasswordAlgorithm {
         let mut key = [0u8; 32];
         key.copy_from_slice(file_encryption_key);
 
-        Aes256EbcEnc::new(&key.into())
-            .encrypt_block_mut(&mut bytes.into());
+        let mut encryptor = Aes256EbcEnc::new(&key.into());
+
+        for block in bytes.chunks_exact_mut(16) {
+            encryptor.encrypt_block_mut(block.into());
+        }
 
         // The result (16 bytes) is stored as the Perms string, and checked for validity when the
         // file is opened.
@@ -1128,8 +1150,11 @@ impl PasswordAlgorithm {
         let mut key = [0u8; 32];
         key.copy_from_slice(file_encryption_key);
 
-        Aes256EbcDec::new(&key.into())
-            .decrypt_block_mut(&mut bytes.into());
+        let mut decryptor = Aes256EbcDec::new(&key.into());
+
+        for block in bytes.chunks_exact_mut(16) {
+            decryptor.decrypt_block_mut(block.into());
+        }
 
         // Verify that bytes 9-11 of the result are the characters "a", "d", "b".
         if &bytes[9..][..3] != b"adb" {
@@ -1138,7 +1163,7 @@ impl PasswordAlgorithm {
 
         // Bytes 0-3 of the decrypted Perms entry, treated as a little-endian integer, are the
         // user permissions. They should match the value in the P key.
-        if bytes[..3] != u64::to_le_bytes(self.permissions.p_value())[..3] {
+        if bytes[..3] != u64::to_le_bytes(self.permissions.bits())[..3] {
             return Err(DecryptionError::IncorrectPassword);
         }
 
@@ -1209,5 +1234,259 @@ impl PasswordAlgorithm {
             5..=6 => self.authenticate_owner_password_r6(owner_password),
             _ => Err(DecryptionError::UnsupportedRevision),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Permissions;
+    use crate::creator::tests::create_document;
+    use crate::encryption::PasswordAlgorithm;
+    use rand::Rng as _;
+
+    #[test]
+    fn authenticate_password_r2() {
+        let document = create_document();
+
+        let mut algorithm = PasswordAlgorithm {
+            encrypt_metadata: true,
+            length: None,
+            version: 1,
+            revision: 2,
+            permissions: Permissions::all(),
+            ..Default::default()
+        };
+
+        let owner_password = "owner";
+        let user_password = "user";
+
+        // Sanitize the passwords.
+        let owner_password = algorithm.sanitize_password_r4(owner_password).unwrap();
+        let user_password = algorithm.sanitize_password_r4(user_password).unwrap();
+
+        // Compute the hashed values.
+        algorithm.owner_value = algorithm.compute_hashed_owner_password_r4(
+            Some(&owner_password),
+            &user_password,
+        ).unwrap();
+
+        algorithm.user_value = algorithm.compute_hashed_user_password_r2(
+            &document,
+            &user_password,
+        ).unwrap();
+
+        // Assert that the correct passwords authenticate.
+        assert!(algorithm.authenticate_owner_password_r4(&document, &owner_password).is_ok());
+        assert!(algorithm.authenticate_user_password_r4(&document, &user_password).is_ok());
+
+        // Assert that the swapped passwords do not authenticate.
+        assert!(algorithm.authenticate_owner_password_r4(&document, user_password).is_err());
+        assert!(algorithm.authenticate_user_password_r4(&document, owner_password).is_err());
+    }
+
+    #[test]
+    fn authenticate_password_r3() {
+        let document = create_document();
+
+        let mut algorithm = PasswordAlgorithm {
+            encrypt_metadata: true,
+            length: Some(40),
+            version: 2,
+            revision: 3,
+            permissions: Permissions::all(),
+            ..Default::default()
+        };
+
+        let owner_password = "owner";
+        let user_password = "user";
+
+        // Sanitize the passwords.
+        let owner_password = algorithm.sanitize_password_r4(owner_password).unwrap();
+        let user_password = algorithm.sanitize_password_r4(user_password).unwrap();
+
+        // Compute the hashed values.
+        algorithm.owner_value = algorithm.compute_hashed_owner_password_r4(
+            Some(&owner_password),
+            &user_password,
+        ).unwrap();
+
+        algorithm.user_value = algorithm.compute_hashed_user_password_r3_r4(
+            &document,
+            &user_password,
+        ).unwrap();
+
+        // Assert that the correct passwords authenticate.
+        assert!(algorithm.authenticate_owner_password_r4(&document, &owner_password).is_ok());
+        assert!(algorithm.authenticate_user_password_r4(&document, &user_password).is_ok());
+
+        // Assert that the swapped passwords do not authenticate.
+        assert!(algorithm.authenticate_owner_password_r4(&document, user_password).is_err());
+        assert!(algorithm.authenticate_user_password_r4(&document, owner_password).is_err());
+    }
+
+    #[test]
+    fn authenticate_password_r4() {
+        let document = create_document();
+
+        let mut algorithm = PasswordAlgorithm {
+            encrypt_metadata: true,
+            length: Some(128),
+            version: 4,
+            revision: 4,
+            permissions: Permissions::all(),
+            ..Default::default()
+        };
+
+        let owner_password = "owner";
+        let user_password = "user";
+
+        // Sanitize the passwords.
+        let owner_password = algorithm.sanitize_password_r4(owner_password).unwrap();
+        let user_password = algorithm.sanitize_password_r4(user_password).unwrap();
+
+        // Compute the hashed values.
+        algorithm.owner_value = algorithm.compute_hashed_owner_password_r4(
+            Some(&owner_password),
+            &user_password,
+        ).unwrap();
+
+        algorithm.user_value = algorithm.compute_hashed_user_password_r3_r4(
+            &document,
+            &user_password,
+        ).unwrap();
+
+        // Assert that the correct passwords authenticate.
+        assert!(algorithm.authenticate_owner_password_r4(&document, &owner_password).is_ok());
+        assert!(algorithm.authenticate_user_password_r4(&document, &user_password).is_ok());
+
+        // Assert that the swapped passwords do not authenticate.
+        assert!(algorithm.authenticate_owner_password_r4(&document, user_password).is_err());
+        assert!(algorithm.authenticate_user_password_r4(&document, owner_password).is_err());
+    }
+
+    #[test]
+    fn authenticate_password_r5() {
+        let mut algorithm = PasswordAlgorithm {
+            encrypt_metadata: true,
+            version: 5,
+            revision: 5,
+            permissions: Permissions::all(),
+            ..Default::default()
+        };
+
+        let owner_password = "owner";
+        let user_password = "user";
+
+        // Sanitize the passwords.
+        let owner_password = algorithm.sanitize_password_r6(owner_password).unwrap();
+        let user_password = algorithm.sanitize_password_r6(user_password).unwrap();
+
+        // Compute the hashed values.
+        let mut file_encryption_key = [0u8; 32];
+
+        let mut rng = rand::rng();
+        rng.fill(&mut file_encryption_key);
+
+        let (user_value, user_encrypted) = algorithm.compute_hashed_user_password_r6(
+            file_encryption_key,
+            &user_password,
+        ).unwrap();
+
+        algorithm.user_value = user_value;
+        algorithm.user_encrypted = user_encrypted;
+
+        let (owner_value, owner_encrypted) = algorithm.compute_hashed_owner_password_r6(
+            file_encryption_key,
+            &owner_password,
+        ).unwrap();
+
+        algorithm.owner_value = owner_value;
+        algorithm.owner_encrypted = owner_encrypted;
+
+        algorithm.permission_encrypted = algorithm.compute_permissions(
+            file_encryption_key,
+        ).unwrap();
+
+        // Assert that the correct passwords authenticate.
+        assert!(algorithm.authenticate_owner_password_r6(&owner_password).is_ok());
+        assert!(algorithm.authenticate_user_password_r6(&user_password).is_ok());
+
+        // Assert that the swapped passwords do not authenticate.
+        assert!(algorithm.authenticate_owner_password_r6(&user_password).is_err());
+        assert!(algorithm.authenticate_user_password_r6(&owner_password).is_err());
+
+        // Assert that the permissions validate correctly.
+        assert!(algorithm.validate_permissions(&file_encryption_key).is_ok());
+
+        // Assert that the file encryption key is equal for the owner password.
+        let key = algorithm.compute_file_encryption_key_r6(&owner_password).unwrap();
+        assert_eq!(&file_encryption_key[..], key);
+
+        // Assert that the file encryption key is equal for the user password.
+        let key = algorithm.compute_file_encryption_key_r6(&user_password).unwrap();
+        assert_eq!(&file_encryption_key[..], key);
+    }
+
+    #[test]
+    fn authenticate_password_r6() {
+        let mut algorithm = PasswordAlgorithm {
+            encrypt_metadata: true,
+            version: 5,
+            revision: 6,
+            permissions: Permissions::all(),
+            ..Default::default()
+        };
+
+        let owner_password = "owner";
+        let user_password = "user";
+
+        // Sanitize the passwords.
+        let owner_password = algorithm.sanitize_password_r6(owner_password).unwrap();
+        let user_password = algorithm.sanitize_password_r6(user_password).unwrap();
+
+        // Compute the hashed values.
+        let mut file_encryption_key = [0u8; 32];
+
+        let mut rng = rand::rng();
+        rng.fill(&mut file_encryption_key);
+
+        let (user_value, user_encrypted) = algorithm.compute_hashed_user_password_r6(
+            file_encryption_key,
+            &user_password,
+        ).unwrap();
+
+        algorithm.user_value = user_value;
+        algorithm.user_encrypted = user_encrypted;
+
+        let (owner_value, owner_encrypted) = algorithm.compute_hashed_owner_password_r6(
+            file_encryption_key,
+            &owner_password,
+        ).unwrap();
+
+        algorithm.owner_value = owner_value;
+        algorithm.owner_encrypted = owner_encrypted;
+
+        algorithm.permission_encrypted = algorithm.compute_permissions(
+            file_encryption_key,
+        ).unwrap();
+
+        // Assert that the correct passwords authenticate.
+        assert!(algorithm.authenticate_owner_password_r6(&owner_password).is_ok());
+        assert!(algorithm.authenticate_user_password_r6(&user_password).is_ok());
+
+        // Assert that the swapped passwords do not authenticate.
+        assert!(algorithm.authenticate_owner_password_r6(&user_password).is_err());
+        assert!(algorithm.authenticate_user_password_r6(&owner_password).is_err());
+
+        // Assert that the permissions validate correctly.
+        assert!(algorithm.validate_permissions(&file_encryption_key).is_ok());
+
+        // Assert that the file encryption key is equal for the owner password.
+        let key = algorithm.compute_file_encryption_key_r6(&owner_password).unwrap();
+        assert_eq!(&file_encryption_key[..], key);
+
+        // Assert that the file encryption key is equal for the user password.
+        let key = algorithm.compute_file_encryption_key_r6(&user_password).unwrap();
+        assert_eq!(&file_encryption_key[..], key);
     }
 }

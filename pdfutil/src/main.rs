@@ -4,111 +4,112 @@ use std::collections::BTreeMap;
 
 #[macro_use]
 extern crate clap;
-use clap::{App, Arg, SubCommand};
+use clap::{Command, Arg};
 use std::str::FromStr;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 fn main() {
     env_logger::init();
 
-    let app = App::new("PDF utility program using lopdf library")
+    let app = Command::new("PDF utility program using lopdf library")
         .version(crate_version!())
         .author(crate_authors!())
         .arg(
-            Arg::with_name("input")
-                .short("i")
+            Arg::new("input")
+                .short('i')
                 .long("input")
                 .value_name("input file")
-                .takes_value(true)
+                .num_args(1)
                 .global(true),
         )
         .arg(
-            Arg::with_name("output")
-                .short("o")
+            Arg::new("output")
+                .short('o')
                 .long("output")
                 .value_name("output file")
-                .takes_value(true)
+                .num_args(1)
                 .global(true),
         )
         .arg(
-            Arg::with_name("merge")
-                .short("m")
+            Arg::new("merge")
+                .short('m')
                 .long("merge")
                 .value_name("merge files")
-                .takes_value(true)
-                .multiple(true)
+                .num_args(1..)
                 .global(true),
         )
         .subcommand(
-            SubCommand::with_name("process")
+            Command::new("process")
                 .about("Process PDF document with specified operations")
                 .arg(
-                    Arg::with_name("operations")
+                    Arg::new("operations")
                         .value_name("operations")
                         .help("e.g. prune_objects delete_zero_length_streams renumber_objects")
-                        .takes_value(true)
-                        .multiple(true),
+                        .num_args(1..)
                 ),
         )
-        .subcommand(SubCommand::with_name("compress").about("Compress PDF document"))
-        .subcommand(SubCommand::with_name("decompress").about("Decompress PDF document"))
+        .subcommand(Command::new("compress").about("Compress PDF document"))
+        .subcommand(Command::new("decompress").about("Decompress PDF document"))
         .subcommand(
-            SubCommand::with_name("delete_pages").about("Delete pages").arg(
-                Arg::with_name("pages")
+            Command::new("delete_pages").about("Delete pages").arg(
+                Arg::new("pages")
                     .value_name("page numbers")
                     .help("e.g. 3,5,7-9")
-                    .takes_value(true),
+                    .num_args(1)
             ),
         )
         .subcommand(
-            SubCommand::with_name("extract_pages").about("Extract pages").arg(
-                Arg::with_name("pages")
+            Command::new("extract_pages").about("Extract pages").arg(
+                Arg::new("pages")
                     .value_name("page numbers")
                     .help("e.g. 3,5,7-9")
-                    .takes_value(true),
+                    .num_args(1)
             ),
         )
-        .subcommand(SubCommand::with_name("prune_objects").about("Prune unused objects"))
+        .subcommand(Command::new("prune_objects").about("Prune unused objects"))
         .subcommand(
-            SubCommand::with_name("delete_objects").about("Delete objects").arg(
-                Arg::with_name("ids")
+            Command::new("delete_objects").about("Delete objects").arg(
+                Arg::new("ids")
                     .value_name("object ids")
                     .help("e.g. \"1 0,2 1,35,36\"")
-                    .takes_value(true),
+                    .num_args(1)
             ),
         )
         .subcommand(
-            SubCommand::with_name("extract_text").about("Extract text").arg(
-                Arg::with_name("pages")
+            Command::new("extract_text").about("Extract text").arg(
+                Arg::new("pages")
                     .value_name("page numbers")
                     .help("e.g. 3,5,7-9")
-                    .takes_value(true),
+                    .num_args(1)
             ),
         )
         .subcommand(
-            SubCommand::with_name("replace_text").about("Replace text").arg(
-                Arg::with_name("text")
+            Command::new("replace_text").about("Replace text").arg(
+                Arg::new("text")
                     .value_name("page_number:old_text=>new_text")
-                    .takes_value(true),
+                    .num_args(1)
             ),
         )
         .subcommand(
-            SubCommand::with_name("extract_stream")
+            Command::new("extract_stream")
                 .about("Extract stream content")
                 .arg(
-                    Arg::with_name("ids")
+                    Arg::new("ids")
                         .value_name("object ids")
                         .help("e.g. \"1 0,2 1,35,36\"")
-                        .takes_value(true),
+                        .num_args(1)
                 ),
         )
-        .subcommand(SubCommand::with_name("print_streams").about("Print streams"))
-        .subcommand(SubCommand::with_name("renumber_objects").about("Renumber objects"))
-        .subcommand(SubCommand::with_name("delete_zero_length_streams").about("Delete zero length stream objects"))
+        .subcommand(Command::new("print_streams").about("Print streams"))
+        .subcommand(Command::new("renumber_objects").about("Renumber objects"))
+        .subcommand(Command::new("delete_zero_length_streams").about("Delete zero length stream objects"))
         .get_matches();
 
-    if let Some(_) = app.value_of("merge") {
-        let filenames: Vec<&str> = app.values_of("merge").unwrap().collect();
-        let documents: Vec<Document> = filenames.into_iter().map(|f| Document::load(f)).flatten().collect();
+    let stop = Arc::new(AtomicBool::new(false));
+    if let Some(_) = app.get_one("merge") {
+        let filenames: Vec<&str> = app.get_many("merge").unwrap().cloned().collect();
+        let documents: Vec<Document> = filenames.into_iter().map(|f| Document::load(f, stop.clone())).flatten().collect();
         // We use this to keep track of the last Parent per layer depth.
         let mut layer_parent: [Option<u32>; 4] = [None; 4];
 
@@ -119,7 +120,7 @@ fn main() {
         let mut max_id = 1;
         let mut pagenum = 1;
         // Collect all Documents Objects grouped by a map
-        let mut documents_pages = BTreeMap::new();
+        let mut documents_pages: BTreeMap<ObjectId, Object> = BTreeMap::new();
         let mut documents_objects = BTreeMap::new();
         let mut document = Document::with_version("1.5");
 
@@ -340,7 +341,7 @@ fn main() {
 
         // Save the merged PDF
         // Store file in current working directory.
-        if let Some(output) = app.value_of("output") {
+        if let Some(output) = app.get_one("output") {
             info!("Save to {}", output);
             document.save(output).unwrap();
         } else {
@@ -348,16 +349,16 @@ fn main() {
         }
     }
 
-    if let (cmd, Some(args)) = app.subcommand() {
-        if let Some(input) = args.value_of("input") {
+    if let Some((cmd, args)) = app.subcommand() {
+        if let Some(input) = args.get_one("input") {
             info!("Open {}", input);
-            let mut doc = Document::load(input).unwrap();
+            let mut doc = Document::load(input, stop).unwrap();
             //info!("{:?}", doc.get_pages());
 
             info!("Do {}", cmd);
             match cmd {
                 "process" => {
-                    if let Some(operations) = args.values_of("operations") {
+                    if let Some(operations) = args.get_many("operations") {
                         for operation in operations {
                             info!("Do {}", operation);
                             apply_operation(&mut doc, operation);
@@ -365,7 +366,7 @@ fn main() {
                     }
                 }
                 "extract_pages" => {
-                    if let Some(pages) = args.value_of("pages") {
+                    if let Some(pages) = args.get_one("pages") {
                         let page_numbers = compute_page_numbers(pages);
                         let total = *doc.get_pages().keys().max().unwrap_or(&0);
                         let page_numbers = complement_page_numbers(&page_numbers, total);
@@ -373,13 +374,13 @@ fn main() {
                     }
                 }
                 "delete_pages" => {
-                    if let Some(pages) = args.value_of("pages") {
+                    if let Some(pages) = args.get_one("pages") {
                         let page_numbers = compute_page_numbers(pages);
                         doc.delete_pages(&page_numbers);
                     }
                 }
                 "delete_objects" => {
-                    if let Some(ids) = args.value_of("ids") {
+                    if let Some(ids) = args.get_one("ids") {
                         for id in ids.split(',') {
                             let nums: Vec<u32> = id.split(' ').map(|num| u32::from_str(num).unwrap()).collect();
                             match nums.len() {
@@ -391,14 +392,14 @@ fn main() {
                     }
                 }
                 "extract_text" => {
-                    if let Some(pages) = args.value_of("pages") {
+                    if let Some(pages) = args.get_one("pages") {
                         let page_numbers = compute_page_numbers(pages);
                         let text = doc.extract_text(&page_numbers);
                         info!("{}", text.unwrap());
                     }
                 }
                 "replace_text" => {
-                    if let Some(text) = args.value_of("text") {
+                    if let Some(text) = args.get_one("text") {
                         let parts: Vec<&str> = text.splitn(2, ':').collect();
                         let page = u32::from_str(parts[0]).unwrap();
                         let words: Vec<&str> = parts[1].splitn(2, "=>").collect();
@@ -413,7 +414,7 @@ fn main() {
                     }
                 }
                 "extract_stream" => {
-                    if let Some(ids) = args.value_of("ids") {
+                    if let Some(ids) = args.get_one("ids") {
                         for id in ids.split(',') {
                             let nums: Vec<u32> = id.split(' ').map(|num| u32::from_str(num).unwrap()).collect();
                             match nums.len() {
@@ -431,7 +432,7 @@ fn main() {
 
             doc.change_producer("https://crates.io/crates/lopdf");
 
-            if let Some(output) = args.value_of("output") {
+            if let Some(output) = args.get_one("output") {
                 info!("Save to {}", output);
                 doc.save(output).unwrap();
             }

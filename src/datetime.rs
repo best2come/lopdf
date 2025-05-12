@@ -70,14 +70,16 @@ mod jiff_impl {
             // CAPITAL Z signifies that local time is equal to UT. If no UT information is
             // specified, the relationship of the specified time to UT shall be considered GMT."
             //
-            // 1. Try parsing the full date and time with the `%#z` specifier to parse the timezone as a `Zoned` object.
-            // 2. Try parsing the full date and time with the 'Z' suffix as a `DateTime` interpreted to be in the UTC
-            //    timezone.
-            // 3. Try parsing the date and time without the seconds specified with the `%#z` specifier to parse the
-            //    timezone as a `Zoned` object.
-            // 4. Try parsing the date and time without the seconds specified with the 'Z' as a `DateTime` interpreted
+            // 1. Try parsing the full date and time with the `%#z` specifier to parse the timezone
+            //    as a `Zoned` object.
+            // 2. Try parsing the full date and time with the 'Z' suffix as a `DateTime` interpreted
             //    to be in the UTC timezone.
-            // 5. Try parsing the date with no time as a `Date` interpreted to be in the GMT timezone.
+            // 3. Try parsing the date and time without the seconds specified with the `%#z`
+            //    specifier to parse the timezone as a `Zoned` object.
+            // 4. Try parsing the date and time without the seconds specified with the 'Z' as a
+            //    `DateTime` interpreted to be in the UTC timezone.
+            // 5. Try parsing the date with no time as a `Date` interpreted to be in the GMT
+            //    timezone.
             //
             // In all cases we return a `Zoned` object here to preserve the timezone.
             Zoned::strptime("%Y%m%d%H%M%S%#z", &value.0)

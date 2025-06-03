@@ -413,12 +413,11 @@ impl Reader<'_> {
             .get(b"Length")
             .and_then(|value| self.document.dereference(value))
             .and_then(|(_id, obj)| obj.as_i64())
-            .map_err(|err| {
+            .inspect_err(|_err| {
                 error!(
                     "stream dictionary of '{} {} R' is missing the Length entry",
                     object_id.0, object_id.1
                 );
-                err
             })
     }
 

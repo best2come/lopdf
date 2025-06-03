@@ -55,15 +55,15 @@ impl Document {
                     if let Ok(dict) = self.get_dictionary(obj_ref) {
                         let val = dict.get(b"D").as_ref().unwrap().as_array()?;
                         let dest = Destination::new(key.unwrap().clone(), val[0].clone(), val[1].clone());
-                        named_destinations.insert(key.unwrap().as_str().unwrap().to_vec(), dest);
+                        named_destinations.insert(key.unwrap().as_str()?.to_vec(), dest);
                     } else if let Ok(Object::Array(val)) = self.get_object(obj_ref) {
                         let dest = Destination::new(key.unwrap().clone(), val[0].clone(), val[1].clone());
-                        named_destinations.insert(key.unwrap().as_str().unwrap().to_vec(), dest);
+                        named_destinations.insert(key.unwrap().as_str()?.to_vec(), dest);
                     }
                 } else if let Ok(dict) = val.unwrap().as_dict() {
                     let val = dict.get(b"D").as_ref().unwrap().as_array()?;
                     let dest = Destination::new(key.unwrap().clone(), val[0].clone(), val[1].clone());
-                    named_destinations.insert(key.unwrap().as_str().unwrap().to_vec(), dest);
+                    named_destinations.insert(key.unwrap().as_str()?.to_vec(), dest);
                 } else {
                     // TODO: Log error: Unpexpected node type
                 }

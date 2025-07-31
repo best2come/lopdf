@@ -1,6 +1,6 @@
 use crate::encodings;
-use crate::encodings::cmap::ToUnicodeCMap;
 use crate::encodings::Encoding;
+use crate::encodings::cmap::ToUnicodeCMap;
 use crate::error::DecompressError;
 use crate::{Document, Error, Result};
 use indexmap::IndexMap;
@@ -396,15 +396,15 @@ impl Dictionary {
             .or_else(|_| self.get(b"Linearized").and(Ok(b"Linearized")))
     }
 
-    pub fn iter(&self) -> indexmap::map::Iter<Vec<u8>, Object> {
+    pub fn iter(&'_ self) -> indexmap::map::Iter<'_, Vec<u8>, Object> {
         self.0.iter()
     }
 
-    pub fn iter_mut(&mut self) -> indexmap::map::IterMut<Vec<u8>, Object> {
+    pub fn iter_mut(&'_ mut self) -> indexmap::map::IterMut<'_, Vec<u8>, Object> {
         self.0.iter_mut()
     }
 
-    pub fn get_font_encoding(&self, doc: &Document) -> Result<Encoding> {
+    pub fn get_font_encoding(&'_ self, doc: &Document) -> Result<Encoding<'_>> {
         if !self.has_type(b"Font") {
             return Err(Error::DictType {
                 expected: "Font",
@@ -433,10 +433,7 @@ impl Dictionary {
             }
             Ok(name) => Ok(Encoding::SimpleEncoding(name)),
             Err(err) => {
-                warn!(
-                    "Could not parse the encoding, error: {:#?}\nFont: {:#?}\nTrying to retrieve ToUnicode.",
-                    err, self
-                );
+                warn!("Could not parse the encoding, error: {err:#?}\nFont: {self:#?}\nTrying to retrieve ToUnicode.",);
                 let stream = self.get_deref(b"ToUnicode", doc).and_then(Object::as_stream);
                 if let Ok(stream) = stream {
                     return self.get_encoding_from_to_unicode_cmap(stream);
@@ -448,7 +445,7 @@ impl Dictionary {
         }
     }
 
-    fn get_encoding_from_to_unicode_cmap(&self, stream: &Stream) -> Result<Encoding> {
+    fn get_encoding_from_to_unicode_cmap(&'_ self, stream: &Stream) -> Result<Encoding<'_>> {
         let content = stream.get_plain_content()?;
         let cmap = ToUnicodeCMap::parse(content)?;
         Ok(Encoding::UnicodeMapEncoding(cmap))
@@ -661,8 +658,8 @@ impl Stream {
     }
 
     pub fn compress(&mut self) -> Result<()> {
-        use flate2::write::ZlibEncoder;
         use flate2::Compression;
+        use flate2::write::ZlibEncoder;
         use std::io::prelude::*;
 
         if self.dict.get(b"Filter").is_err() {
@@ -698,7 +695,7 @@ impl Stream {
     }
 
     fn decompress_lzw(input: &[u8], params: Option<&Dictionary>) -> Result<Vec<u8>> {
-        use weezl::{decode::Decoder, BitOrder};
+        use weezl::{BitOrder, decode::Decoder};
         const MIN_BITS: u8 = 9;
 
         let early_change = params
@@ -722,7 +719,7 @@ impl Stream {
 
         let result = decoder.into_stream(&mut output).decode_all(input);
         if let Err(err) = result.status {
-            warn!("{}", err);
+            warn!("{err}");
         }
 
         output
@@ -737,7 +734,7 @@ impl Stream {
 
         if !input.is_empty() {
             decoder.read_to_end(&mut output).unwrap_or_else(|err| {
-                warn!("{}", err);
+                warn!("{err}");
                 0
             });
         }
@@ -832,7 +829,7 @@ impl Stream {
 
 #[cfg(test)]
 mod test {
-    use crate::{error::DecompressError, Error};
+    use crate::{Error, error::DecompressError};
 
     use super::Stream;
 

@@ -2,13 +2,13 @@ pub mod cmap;
 mod glyphnames;
 mod mappings;
 
+pub use self::mappings::*;
 use crate::Error;
 use crate::Result;
+use crate::parser_aux::substr;
 use cmap::ToUnicodeCMap;
 use encoding_rs::UTF_16BE;
 use log::debug;
-use crate::parser_aux::substr;
-pub use self::mappings::*;
 
 pub fn bytes_to_string(encoding: &CodedCharacterSet, bytes: &[u8]) -> String {
     let code_points = bytes
@@ -113,24 +113,19 @@ impl Encoding<'_> {
                                 _ => { /* Should not happen */ }
                             }
                             result_bytes.extend(bytes_for_code);
-                            i += 1; // Advance by the length of matched sequence
                         } else {
                             // No specific entry, handle as unmappable
                             log::warn!(
-                                "Unicode sequence {:04X?} found in map but no entries, skipping.",
-                                current_unicode_seq
+                                "Unicode sequence {current_unicode_seq:04X?} found in map but no entries, skipping."
                             );
-                            i += 1;
                         }
                     } else {
                         // Character or sequence not found in CMap
                         log::warn!(
-                            "Unicode sequence {:04X?} not found in ToUnicode CMap, skipping.",
-                            current_unicode_seq
+                            "Unicode sequence {current_unicode_seq:04X?} not found in ToUnicode CMap, skipping."
                         );
-                        // Potentially add a replacement character's byte code if defined, or just skip.
-                        i += 1; // Advance by one u16 if not found
                     }
+                    i += 1;
                 }
                 result_bytes
             }

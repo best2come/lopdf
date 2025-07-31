@@ -2,7 +2,7 @@
 authors = [
     "Junfeng Liu <china.liujunfeng@gmail.com>",
     "Emulator <emulator@hotmail.it>",
-    "Martin Bammer <bam5wi@bosch.com>"
+    "Martin Bammer <bam5wi@bosch.com>",
 ]
 categories = ["text-processing"]
 description = "A Rust library for PDF document manipulation."
@@ -14,7 +14,7 @@ license = "MIT"
 name = "lopdf"
 readme = "README.md"
 repository = "https://github.com/J-F-Liu/lopdf.git"
-version = "0.36.2"
+version = "0.37.0"
 rust-version = "1.85"
 
 [dependencies]
@@ -30,7 +30,7 @@ ecb = "0.1.2"
 encoding_rs = "0.8.35"
 flate2 = "1.1"
 image = { version = "0.25", optional = true }
-indexmap = "2.8"
+indexmap = "2.10"
 itoa = "1.0"
 jiff = { version = "0.2", optional = true }
 getrandom = "0.3"
@@ -39,10 +39,10 @@ md-5 = "0.10"
 nom = "8.0"
 nom_locate = "5.0"
 rand = { version = "0.9" }
-rangemap = "1.5"
+rangemap = "1.6"
 rayon = { version = "1.10", optional = true }
 serde = { version = "1.0", features = ["derive"], optional = true }
-sha2 = "0.10.8"
+sha2 = "0.10.9"
 stringprep = "0.1.5"
 thiserror = "2.0.12"
 time = { version = "0.3", features = [
@@ -57,7 +57,8 @@ clap = { version = "4.5", features = ["derive"] }
 env_logger = "0.11"
 serde_json = "1.0"
 shellexpand = "3.1"
-tempfile = "3.18"
+tempfile = "3.20"
+wasm-bindgen-test = "0.3.50"
 
 [features]
 async = ["tokio/rt-multi-thread", "tokio/macros"]

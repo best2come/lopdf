@@ -27,7 +27,7 @@ fn test_get_object() {
 
 #[cfg(all(test, not(feature = "async")))]
 mod tests_with_parsing {
-    use std::sync::{atomic::AtomicBool, Arc};
+    use std::sync::{Arc, atomic::AtomicBool};
 
     use super::*;
     use lopdf::Result;

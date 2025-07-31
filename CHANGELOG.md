@@ -1,6 +1,6 @@
 
-<a name="v0.36.0"></a>
-## [v0.36.0](https://github.com/J-F-Liu/lopdf/compare/0.35.0...v0.36.0) (2025-03-15)
+<a name="v0.37.0"></a>
+## [v0.37.0](https://github.com/best2come/lopdf/compare/0.36.2...v0.37.0) (2025-07-31)
 
 ### Add
 

@@ -233,7 +233,8 @@ impl Reader<'_> {
         let version =
             parser::header(ParserInput::new_extra(self.buffer, "header")).ok_or(ParseError::InvalidFileHeader)?;
 
-        //The binary_mark is in line 2 after the pdf version. If at other line number, then will be declared as invalid pdf.
+        //The binary_mark is in line 2 after the pdf version. If at other line number, then will be declared as invalid
+        // pdf.
         if let Some(pos) = self.buffer.iter().position(|&byte| byte == b'\n') {
             if let Some(binary_mark) =
                 parser::binary_mark(ParserInput::new_extra(&self.buffer[pos + 1..], "binary_mark"))
@@ -309,7 +310,7 @@ impl Reader<'_> {
             if let XrefEntry::Normal { offset, .. } = *entry {
                 let (object_id, mut object) = self
                     .read_object(offset as usize, None, &mut HashSet::new())
-                    .map_err(|e| error!("Object load error: {:?}", e))
+                    .map_err(|e| error!("Object load error: {e:?}"))
                     .ok()?;
                 if let Some(filter_func) = filter_func {
                     filter_func(object_id, &mut object)?;

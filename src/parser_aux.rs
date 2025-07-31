@@ -1,6 +1,8 @@
 use log::warn;
 
+use crate::{Dictionary, Object, ObjectId, Stream, parser};
 use crate::{
+    Error, Result,
     content::{Content, Operation},
     document::Document,
     encodings::Encoding,
@@ -8,9 +10,7 @@ use crate::{
     object::Object::Name,
     parser::ParserInput,
     xref::{Xref, XrefEntry, XrefType},
-    Error, Result,
 };
-use crate::{parser, Dictionary, Object, ObjectId, Stream};
 use std::{
     collections::BTreeMap,
     io::{Cursor, Read},
@@ -164,14 +164,12 @@ impl Document {
                         .as_name()?;
                     current_encoding = encodings.get(current_font);
                 }
-                "Tj" | "TJ" => {
-                    match current_encoding {
-                        Some(encoding) => {
-                            try_to_replace_encoded_text(operation, encoding, text, other_text, default_str.unwrap_or(""))?
-                        }
-                        None => {
-                            warn!("Could not decode extracted text, some of the occurances might not be properly replaced")
-                        }
+                "Tj" | "TJ" => match current_encoding {
+                    Some(encoding) => {
+                        try_to_replace_encoded_text(operation, encoding, text, other_text, default_str.unwrap_or(""))?
+                    }
+                    None => {
+                        warn!("Could not decode extracted text, some of the occurances might not be properly replaced")
                     }
                 },
                 _ => {}
@@ -179,6 +177,61 @@ impl Document {
         }
         let modified_content = content.encode()?;
         self.change_page_content(page_id, modified_content)
+    }
+
+    pub fn replace_partial_text(
+        &mut self, page_number: u32, search_text: &str, replacement_text: &str, default_char: Option<&str>,
+    ) -> Result<usize> {
+        let page = page_number.saturating_sub(1) as usize;
+        let page_id = self
+            .page_iter()
+            .nth(page)
+            .ok_or(Error::PageNumberNotFound(page_number))?;
+
+        let encodings: BTreeMap<Vec<u8>, Encoding> = self
+            .get_page_fonts(page_id)?
+            .into_iter()
+            .map(|(name, font)| font.get_font_encoding(self).map(|it| (name, it)))
+            .collect::<Result<BTreeMap<Vec<u8>, Encoding>>>()?;
+
+        let content_data = self.get_page_content(page_id)?;
+        let mut content = Content::decode(&content_data)?;
+        let mut current_encoding = None;
+        let mut replacement_count = 0;
+
+        for operation in &mut content.operations {
+            match operation.operator.as_ref() {
+                "Tf" => {
+                    let current_font = operation
+                        .operands
+                        .first()
+                        .ok_or_else(|| Error::Syntax("missing font operand".to_string()))?
+                        .as_name()?;
+                    current_encoding = encodings.get(current_font);
+                }
+                "Tj" | "TJ" => {
+                    if let Some(encoding) = current_encoding {
+                        replacement_count += replace_partial_in_operation(
+                            operation,
+                            encoding,
+                            search_text,
+                            replacement_text,
+                            default_char.unwrap_or("?"),
+                        )?;
+                    } else {
+                        warn!("No encoding found for text operation");
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if replacement_count > 0 {
+            let modified_content = content.encode()?;
+            self.change_page_content(page_id, modified_content)?;
+        }
+
+        Ok(replacement_count)
     }
 
     pub fn insert_image(
@@ -269,6 +322,26 @@ pub fn substr(s: &str, start: usize, len: usize) -> &str {
 pub fn substring(s: &str, start: usize) -> &str {
     s.char_indices().nth(start).map(|(idx, _)| &s[idx..]).unwrap_or("")
 }
+
+fn encode(encoding: &Encoding, txt: &str, default_str: &str) -> Vec<u8> {
+    if txt.chars().count() > 1 {
+        let mut cur = 0;
+        let mut result = Vec::new();
+        while cur < txt.chars().count() {
+            let c = substr(txt, cur, 1);
+            result.extend_from_slice(&encode(encoding, c, default_str));
+            cur += 1;
+        }
+        result
+    } else {
+        let encoded_bytes = Document::encode_text(encoding, txt);
+        if !encoded_bytes.is_empty() {
+            encoded_bytes
+        } else {
+            Document::encode_text(encoding, default_str)
+        }
+    }
+}
 fn try_to_replace_encoded_text(
     operation: &mut Operation, encoding: &Encoding, text_to_replace: &str, replacement: &str, default_str: &str,
 ) -> Result<()> {
@@ -277,7 +350,7 @@ fn try_to_replace_encoded_text(
             Object::String(bytes, _) => {
                 let decoded_text = Document::decode_text(encoding, bytes)?;
                 if decoded_text == text_to_replace {
-                    let encoded_bytes = Document::encode_text(encoding, replacement);
+                    let encoded_bytes = encode(encoding, replacement, default_str);
                     *bytes = encoded_bytes;
                 }
             }
@@ -292,19 +365,14 @@ fn try_to_replace_encoded_text(
                         if let Object::String(bytes, _f) = item {
                             if cur == s_len - 1 {
                                 let sub = substring(replacement, cur);
-                                let encoded_bytes = Document::encode_text(encoding, sub);
+                                let encoded_bytes = encode(encoding, sub, default_str);
                                 *bytes = encoded_bytes;
                                 break;
                             } else if cur > r_len {
                                 *item = Object::Null;
                             } else {
                                 let sub = substr(replacement, cur, 1);
-                                let encoded_bytes = Document::encode_text(encoding, sub);
-                                let encoded_bytes = if !encoded_bytes.is_empty() {
-                                    encoded_bytes
-                                } else {
-                                    Document::encode_text(encoding, default_str)
-                                };
+                                let encoded_bytes = encode(encoding, sub, default_str);
                                 *bytes = encoded_bytes;
                             }
                             cur += 1;
@@ -316,6 +384,62 @@ fn try_to_replace_encoded_text(
         }
     }
     Ok(())
+}
+
+fn replace_partial_in_operation(
+    operation: &mut Operation, encoding: &Encoding, search_text: &str, replacement_text: &str, default_char: &str,
+) -> Result<usize> {
+    let mut replacement_count = 0;
+
+    for operand in &mut operation.operands {
+        match operand {
+            Object::String(bytes, _) => {
+                let decoded_text = Document::decode_text(encoding, bytes)?;
+                if decoded_text.contains(search_text) {
+                    let new_text = decoded_text.replace(search_text, replacement_text);
+                    let encoded_bytes = encode_with_fallback(encoding, &new_text, default_char);
+                    *bytes = encoded_bytes;
+                    replacement_count += decoded_text.matches(search_text).count();
+                }
+            }
+            Object::Array(arr) => {
+                replacement_count +=
+                    replace_partial_in_array(arr, encoding, search_text, replacement_text, default_char)?;
+            }
+            _ => {}
+        }
+    }
+
+    Ok(replacement_count)
+}
+
+fn replace_partial_in_array(
+    arr: &mut [Object], encoding: &Encoding, search_text: &str, replacement_text: &str, default_char: &str,
+) -> Result<usize> {
+    let mut replacement_count = 0;
+
+    for item in arr.iter_mut() {
+        if let Object::String(bytes, _) = item {
+            let decoded_text = Document::decode_text(encoding, bytes)?;
+            if decoded_text.contains(search_text) {
+                let new_text = decoded_text.replace(search_text, replacement_text);
+                let encoded_bytes = encode_with_fallback(encoding, &new_text, default_char);
+                *bytes = encoded_bytes;
+                replacement_count += decoded_text.matches(search_text).count();
+            }
+        }
+    }
+
+    Ok(replacement_count)
+}
+
+fn encode_with_fallback(encoding: &Encoding, text: &str, default_char: &str) -> Vec<u8> {
+    let encoded = Document::encode_text(encoding, text);
+    if !encoded.is_empty() {
+        return encoded;
+    }
+
+    encode(encoding, text, default_char)
 }
 
 /// Decode CrossReferenceStream
@@ -426,8 +550,8 @@ mod tests {
         // test load_from() and save_to()
         use std::fs::File;
         use std::io::Cursor;
-        use std::sync::atomic::AtomicBool;
         use std::sync::Arc;
+        use std::sync::atomic::AtomicBool;
         // Create temporary folder to store file.
         let temp_dir = tempfile::tempdir().unwrap();
         let file_path = temp_dir.path().join("test_1_load_and_save.pdf");
@@ -474,5 +598,17 @@ mod tests {
         let doc = create_document_with_texts(&[text1, text2]);
         let extracted_text = doc.extract_text(&[1, 2]);
         assert_eq!(extracted_text.unwrap(), format!("{text1}\n{text2}\n"));
+    }
+
+    #[test]
+    fn test_replace_partial_text() {
+        use crate::creator::tests::create_document_with_texts;
+
+        let mut doc = create_document_with_texts(&["Hello World! Hello Universe!"]);
+        let replacements = doc.replace_partial_text(1, "Hello", "Hi", None).unwrap();
+        assert_eq!(replacements, 2); // Should replace both occurrences
+
+        let extracted_text = doc.extract_text(&[1]).unwrap();
+        assert!(extracted_text.contains("Hi World! Hi Universe!"));
     }
 }

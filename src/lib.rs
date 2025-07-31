@@ -41,7 +41,7 @@ pub use object::{Dictionary, Object, ObjectId, Stream, StringFormat};
 pub use bookmarks::Bookmark;
 pub use common_data_structures::{decode_text_string, text_string};
 pub use destinations::Destination;
-pub use encodings::{Encoding, encode_utf8, encode_utf16_be};
+pub use encodings::{encode_utf16_be, encode_utf8, Encoding};
 pub use encryption::{EncryptionState, EncryptionVersion, Permissions};
 pub use error::{Error, Result};
 pub use incremental_document::IncrementalDocument;
@@ -49,3 +49,6 @@ pub use object_stream::ObjectStream;
 pub use outlines::Outline;
 pub use reader::Reader;
 pub use toc::Toc;
+
+pub use parser_aux::substring;
+pub use parser_aux::substr;
